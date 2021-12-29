@@ -1,5 +1,7 @@
 "use strict";
 
+const fetch = (...args) =>
+  import("node-fetch").then(({ default: fetch }) => fetch(...args));
 const semver = require("semver");
 const miio = require("./miio");
 const util = require("util");
@@ -221,7 +223,6 @@ class XiaomiRoborockVacuum {
         .on("set", (newState, cb) =>
           callbackify(() => this.setDustCollectionState(newState), cb)
         );
-
     }
 
     this.services.battery = new Service.BatteryService(
@@ -287,7 +288,7 @@ class XiaomiRoborockVacuum {
 
     if (this.config.zones) {
       for (var i in this.config.zones) {
-        this.createZone(this.config.zones[i].name, this.config.zones[i].zone);
+        this.createZone(this.config.zones[i].name, this.config.zones[i].id);
       }
     }
 
@@ -391,12 +392,14 @@ class XiaomiRoborockVacuum {
         "get",
         (cb) => callbackify(() => this.getCareFilter(), cb)
       );
-      this.services.Care.getCharacteristic(
-        Characteristic.CareSideBrush
-      ).on("get", (cb) => callbackify(() => this.getCareSideBrush(), cb));
-      this.services.Care.getCharacteristic(
-        Characteristic.CareMainBrush
-      ).on("get", (cb) => callbackify(() => this.getCareMainBrush(), cb));
+      this.services.Care.getCharacteristic(Characteristic.CareSideBrush).on(
+        "get",
+        (cb) => callbackify(() => this.getCareSideBrush(), cb)
+      );
+      this.services.Care.getCharacteristic(Characteristic.CareMainBrush).on(
+        "get",
+        (cb) => callbackify(() => this.getCareMainBrush(), cb)
+      );
     } else {
       this.services.fan
         .getCharacteristic(Characteristic.FilterChangeIndication)
@@ -884,7 +887,8 @@ class XiaomiRoborockVacuum {
   }
 
   get isDustCollecting() {
-    const isDustCollecting = this.device.property("state") === "dust-collection";
+    const isDustCollecting =
+      this.device.property("state") === "dust-collection";
     return isDustCollecting;
   }
 
@@ -1002,25 +1006,26 @@ class XiaomiRoborockVacuum {
     }
   }
 
-  async setCleaningZone(state, zone) {
+  async setCleaningZone(state, zoneId) {
     await this.ensureDevice("setCleaning");
 
     try {
       if (state && !this.isCleaning) {
         // Start cleaning
         this.log.info(
-          `ACT setCleaning | ${this.model} | Start cleaning Zone ${zone}, not charging.`
+          `ACT setCleaning | ${this.model} | Start cleaning Zone ${zoneId}, not charging.`
         );
 
-        const zoneParams = [];
-        for (const zon of zone) {
-          if (zon.length === 4) {
-            zoneParams.push(zon.concat(1));
-          } else if (zon.length === 5) {
-            zoneParams.push(zon);
+        await fetch(
+          `http://${this.config.ip}/api/v2/robot/capabilities/ZoneCleaningCapability/presets/${zoneId}`,
+          {
+            body: JSON.stringify({
+              action: "clean",
+            }),
+            headers: { "Content-Type": "application/json" },
+            method: "put",
           }
-        }
-        await this.device.cleanZones(zoneParams);
+        );
       } else if (!state) {
         // Stop cleaning
         this.log.info(
@@ -1132,13 +1137,13 @@ class XiaomiRoborockVacuum {
       );
   }
 
-  createZone(zoneName, zoneParams) {
+  createZone(zoneName, zoneId) {
     // Make sure `this.device` exists before calling any of the methods
     const callbackify = (fn, cb) =>
       this.device ? callbackifyLib(fn, cb) : cb(new Error("Not connected yet"));
 
     this.log.info(
-      `INF createRoom | ${this.model} | Zone ${zoneName} (${zoneParams})`
+      `INF createRoom | ${this.model} | Zone ${zoneName} (${zoneId})`
     );
     this.services[zoneName] = new Service.Switch(
       `${this.config.cleanword} ${zoneName}`,
@@ -1148,7 +1153,7 @@ class XiaomiRoborockVacuum {
       .getCharacteristic(Characteristic.On)
       .on("get", (cb) => callbackify(() => this.getCleaning(), cb))
       .on("set", (newState, cb) =>
-        callbackify(() => this.setCleaningZone(newState, zoneParams), cb)
+        callbackify(() => this.setCleaningZone(newState, zoneId), cb)
       )
       .on("change", (oldState, newState) => {
         this.changedPause(newState);
@@ -1412,7 +1417,8 @@ class XiaomiRoborockVacuum {
     await this.ensureDevice("getDustCollectionState");
 
     try {
-      const isDustCollecting = this.device.property("state") === "dust-collection";
+      const isDustCollecting =
+        this.device.property("state") === "dust-collection";
       this.log.info(
         `INF getDustCollectionState | ${this.model} | Dust collection is ${isDustCollecting}`
       );
